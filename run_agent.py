@@ -1124,6 +1124,7 @@ class AIAgent:
         compression_summary_model = _compression_cfg.get("summary_model") or None
         compression_target_ratio = float(_compression_cfg.get("target_ratio", 0.20))
         compression_protect_last = int(_compression_cfg.get("protect_last_n", 20))
+        self._flush_per_turn = str(_compression_cfg.get("flush_per_turn", False)).lower() in ("true", "1", "yes")
 
         # Read explicit context_length override from model config
         _model_cfg = _agent_cfg.get("model", {})
@@ -8260,6 +8261,12 @@ class AIAgent:
 
                     self._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
 
+
+                    # [PATCH: per-turn flush] Persist messages to SQLite after every
+                    # tool-call round so a force-kill never loses more than the
+                    # in-flight message. Enable via compression.flush_per_turn in config.yaml
+                    if self._flush_per_turn:
+                        self._flush_messages_to_session_db(messages, conversation_history)
                     # Signal that a paragraph break is needed before the next
                     # streamed text.  We don't emit it immediately because
                     # multiple consecutive tool iterations would stack up
@@ -8332,6 +8339,11 @@ class AIAgent:
                     # No tool calls - this is the final response
                     final_response = assistant_message.content or ""
                     
+
+                    # [PATCH: per-turn flush] Also flush on no-tool-call responses
+                    # before the think-block/fallback branching.
+                    if self._flush_per_turn:
+                        self._flush_messages_to_session_db(messages, conversation_history)
                     # Check if response only has think block with no actual content after it
                     if not self._has_content_after_think_block(final_response):
                         # If the previous turn already delivered real content alongside
